@@ -95,12 +95,12 @@ document.addEventListener("DOMContentLoaded", () => {
       ],
       [
         { key: "audience", tag: "TARGET AUDIENCE", type: "paragraph" },
-        { key: "revenue", tag: "REVENUE MODEL", type: "list" },
+        { key: "revenue", tag: "REVENUE MODEL", type: "paragraph" },
       ],
       [{ key: "mvpFeatures", tag: "MVP FEATURES", type: "list" }],
-      [{ key: "marketing", tag: "MARKETING PLAN", type: "list" }],
-      [{ key: "competitors", tag: "COMPETITOR ANALYSIS", type: "pairs" }],
-      [{ key: "techStack", tag: "TECH STACK RECOMMENDATION", type: "pairs" }],
+      [{ key: "marketing", tag: "MARKETING PLAN", type: "paragraph" }],
+      [{ key: "competitors", tag: "COMPETITOR ANALYSIS", type: "paragraph" }],
+      [{ key: "techStack", tag: "TECH STACK RECOMMENDATION", type: "paragraph" }],
       [{ key: "checklist", tag: "LAUNCH CHECKLIST", type: "checklist" }],
       [{ key: "nextSteps", tag: "NEXT STEPS", type: "ordered" }],
     ];
@@ -448,6 +448,29 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
 
+    // Maps the backend's response field names to the shorter internal keys
+    // REPORT_LAYOUT/renderResults/copy/export code already use. The API
+    // contract (StartupReport) is intentionally more explicit than the
+    // frontend's internal names, so this adapter is the single place that
+    // bridges the two.
+    function adaptApiResponse(apiData) {
+      return {
+        name: apiData.startupName,
+        tagline: apiData.tagline,
+        pitch: apiData.elevatorPitch,
+        problem: apiData.problem,
+        solution: apiData.solution,
+        audience: apiData.targetAudience,
+        revenue: apiData.revenueModel,
+        mvpFeatures: apiData.mvpFeatures,
+        marketing: apiData.marketingPlan,
+        competitors: apiData.competitorAnalysis,
+        techStack: apiData.techStack,
+        checklist: apiData.launchChecklist,
+        nextSteps: apiData.nextSteps,
+      };
+    }
+
     function handleGenerate() {
       const idea = ideaInput.value.trim();
 
@@ -477,13 +500,12 @@ document.addEventListener("DOMContentLoaded", () => {
     })
     .then(async (response) => {
       const data = await response.json();
-       alert(JSON.stringify(data));
 
       if (!response.ok) {
         throw new Error(data.error || "Generation failed.");
      }
 
-      finishLoading(data);
+      finishLoading(adaptApiResponse(data));
   })
     .catch((error) => {
       console.error(error);
