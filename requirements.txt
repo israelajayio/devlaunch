@@ -2,8 +2,8 @@
 Flask>=3.0.3
 Flask-CORS>=4.0.1
 
-# --- OpenAI Responses API + structured outputs --------------------------
-openai>=1.60.0
+# --- Gemini API + structured outputs -------------------------------------
+google-genai>=1.20.0
 pydantic>=2.7.0
 
 # --- Environment variables ----------------------------------------------

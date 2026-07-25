@@ -1,6 +1,6 @@
 """
 DevLaunch backend — Flask API that turns a one-line startup idea into a
-full, structured startup report using the OpenAI Responses API.
+full, structured startup report using the Gemini API (google-genai SDK).
 
 Run locally with:
     python app.py
@@ -18,25 +18,21 @@ from typing import List
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from openai import (
-    APIConnectionError,
-    APIStatusError,
-    APITimeoutError,
-    OpenAI,
-    RateLimitError,
-)
+from google import genai
+from google.genai import errors as genai_errors
+from google.genai import types
 from pydantic import BaseModel, Field, ValidationError
 
 # =============================================================================
 # Environment & configuration
 # =============================================================================
 # Loads variables from a local .env file (see .env.example) into os.environ.
-# This must run before we read any OPENAI_API_KEY / config values below.
+# This must run before we read any GEMINI_API_KEY / config values below.
 load_dotenv()
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
-OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30"))
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+GEMINI_TIMEOUT_SECONDS = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "30"))
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 PORT = int(os.getenv("PORT", "5000"))
@@ -44,11 +40,11 @@ FLASK_ENV = os.getenv("FLASK_ENV", "production")
 
 # The API key is never sent to or read by the frontend — it only ever lives
 # in this process's environment, loaded from .env, and is used solely for
-# server-to-server calls to OpenAI below.
-if not OPENAI_API_KEY:
+# server-to-server calls to Gemini below.
+if not GEMINI_API_KEY:
     raise RuntimeError(
-        "OPENAI_API_KEY is not set. Copy .env.example to .env and add your "
-        "OpenAI API key before starting the server."
+        "GEMINI_API_KEY is not set. Copy .env.example to .env and add your "
+        "Gemini API key before starting the server."
     )
 
 # Longest idea description we'll accept, to keep requests reasonable and
@@ -77,17 +73,24 @@ _allowed_origins = (
 CORS(app, resources={r"/generate": {"origins": _allowed_origins}, r"/health": {"origins": _allowed_origins}})
 
 # =============================================================================
-# OpenAI client
+# Gemini client
+# -----------------------------------------------------------------------------
+# Uses the Gemini Developer API (API key auth) rather than Vertex AI. The
+# timeout is expressed in milliseconds per google.genai.types.HttpOptions.
 # =============================================================================
-client = OpenAI(api_key=OPENAI_API_KEY, timeout=OPENAI_TIMEOUT_SECONDS)
+client = genai.Client(
+    api_key=GEMINI_API_KEY,
+    http_options=types.HttpOptions(timeout=int(GEMINI_TIMEOUT_SECONDS * 1000)),
+)
 
 # =============================================================================
 # Response schema (Pydantic)
 # -----------------------------------------------------------------------------
-# Passed to the Responses API as `text_format`. OpenAI's structured-outputs
-# feature constrains generation so the model's JSON always matches this
+# Passed to generate_content as `response_schema`. Gemini's structured-output
+# support constrains generation so the model's JSON always matches this
 # schema exactly — no missing keys, no wrong types, no manual JSON parsing
-# or repair logic needed on our side.
+# or repair logic needed on our side. This model — and therefore the JSON
+# shape returned to the frontend — is unchanged from the OpenAI version.
 # =============================================================================
 class StartupReport(BaseModel):
     startupName: str = Field(..., description="A short, memorable, brandable startup name.")
@@ -109,8 +112,9 @@ class StartupReport(BaseModel):
 # AI prompt
 # -----------------------------------------------------------------------------
 # System prompt establishes the persona (experienced startup consultant) and
-# quality bar. It's kept separate from the per-request user message so it's
-# easy to tune independently of the idea being analyzed.
+# quality bar. It's passed as `system_instruction` in GenerateContentConfig,
+# kept separate from the per-request user message so it's easy to tune
+# independently of the idea being analyzed.
 # =============================================================================
 SYSTEM_PROMPT = """You are a senior startup consultant with 15+ years of experience advising \
 early-stage founders, in the style of a top-tier accelerator (e.g. Y Combinator) partner.
@@ -141,30 +145,31 @@ def build_user_prompt(idea: str) -> str:
 # =============================================================================
 def generate_startup_report(idea: str) -> dict:
     """
-    Calls the OpenAI Responses API to turn a startup idea into a structured
-    StartupReport, and returns it as a plain JSON-serializable dict.
+    Calls the Gemini API (via google-genai) to turn a startup idea into a
+    structured StartupReport, and returns it as a plain JSON-serializable
+    dict.
 
-    Raises the underlying OpenAI SDK exceptions (RateLimitError,
-    APIConnectionError, APITimeoutError, APIStatusError) or ValueError on
-    an unexpected/empty result — callers are responsible for catching these
-    and translating them into HTTP responses.
+    Raises google.genai.errors.APIError (covers both client- and server-side
+    failures, e.g. rate limits, invalid requests, upstream outages) or
+    ValueError on an unexpected/empty result — callers are responsible for
+    catching these and translating them into HTTP responses.
     """
-    response = client.responses.parse(
-        model=OPENAI_MODEL,
-        input=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": build_user_prompt(idea)},
-        ],
-        text_format=StartupReport,
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=build_user_prompt(idea),
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            response_mime_type="application/json",
+            response_schema=StartupReport,
+        ),
     )
 
-    report = response.output_parsed
+    report = response.parsed
     if report is None:
         # The model either refused the request or produced output that
         # didn't match the schema (rare, since structured outputs enforce
         # schema conformance, but handled defensively).
-        refusal = getattr(response, "output_text", None)
-        logger.warning("Model returned no parsed report. Raw output: %s", refusal)
+        logger.warning("Model returned no parsed report. Raw text: %s", getattr(response, "text", None))
         raise ValueError("The model did not return a structured report.")
 
     return report.model_dump()
@@ -203,17 +208,18 @@ def generate():
             400,
         )
 
-    # ---- 2. Call OpenAI and build the report -------------------------------
+    # ---- 2. Call Gemini and build the report -------------------------------
     try:
         report = generate_startup_report(idea)
         logger.info("Generated startup report for idea: %r", idea[:80])
         return jsonify(report), 200
 
-    except (RateLimitError, APIConnectionError, APITimeoutError, APIStatusError) as exc:
-        # Known failure modes talking to OpenAI (rate limits, network
-        # issues, timeouts, non-2xx API responses). Logged with detail
-        # server-side; the client just gets a generic 500.
-        logger.error("OpenAI API error while generating report: %s", exc)
+    except genai_errors.APIError as exc:
+        # Known failure modes talking to Gemini (rate limits, invalid
+        # requests, upstream server errors, etc. — covers both ClientError
+        # and ServerError, which both subclass APIError). Logged with
+        # detail server-side; the client just gets a generic 500.
+        logger.error("Gemini API error while generating report: %s", exc)
         return jsonify({"error": "The AI service is currently unavailable. Please try again shortly."}), 500
 
     except ValidationError as exc:
@@ -221,8 +227,10 @@ def generate():
         return jsonify({"error": "The AI returned an unexpected response format."}), 500
 
     except Exception:
-        # Catch-all for anything unforeseen so the process never crashes
-        # and the client always gets valid JSON back.
+        # Catch-all for anything unforeseen (including network-level issues
+        # such as connection errors/timeouts that surface as generic
+        # exceptions rather than APIError) so the process never crashes and
+        # the client always gets valid JSON back.
         logger.exception("Unexpected error while generating startup report")
         return jsonify({"error": "An unexpected error occurred. Please try again."}), 500
 
