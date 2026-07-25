@@ -466,9 +466,33 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // Simulate an API/generation delay so the loading + skeleton states
       // are visible. Swap this for a real request when one exists.
-      window.setTimeout(() => {
-        finishLoading(MOCK_RESULT);
-      }, SIMULATED_LOAD_MS);
+      fetch("https://devlaunch-zuay.onrender.com/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+      },
+        body: JSON.stringify({
+          idea: idea
+      })
+    })
+    .then(async (response) => {
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Generation failed.");
+     }
+
+      finishLoading(data);
+  })
+    .catch((error) => {
+      console.error(error);
+
+      formMessage.textContent = error.message || "Unable to generate your startup report.";
+
+      generateBtn.classList.remove("is-loading");
+      generateBtn.disabled = false;
+      generateBtn.setAttribute("aria-busy", "false");
+  });
     }
 
     function startLoading() {
