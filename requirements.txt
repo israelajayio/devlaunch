@@ -1,0 +1,13 @@
+# --- Web framework -----------------------------------------------------
+Flask>=3.0.3
+Flask-CORS>=4.0.1
+
+# --- OpenAI Responses API + structured outputs --------------------------
+openai>=1.60.0
+pydantic>=2.7.0
+
+# --- Environment variables ----------------------------------------------
+python-dotenv>=1.0.1
+
+# --- Production WSGI server (recommended over `python app.py`) ----------
+gunicorn>=22.0.0
