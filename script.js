@@ -477,6 +477,7 @@ document.addEventListener("DOMContentLoaded", () => {
     })
     .then(async (response) => {
       const data = await response.json();
+       alert(JSON.stringify(data));
 
       if (!response.ok) {
         throw new Error(data.error || "Generation failed.");
